@@ -1,0 +1,6 @@
+Client and server use pre-shared password for authentication.
+Server sends message advertising their capabilities.
+Client can (at any time) send a .so file and a list of names to server,
+  server saves file and names and replies with uint64_t's it uses to remember those routines.
+Client can (at any time) send a routine number and argument pointer to server,
+  server replies with sequence number, then runs specified routine with specified argument and eventually replies with sequence number and data produced by routine.

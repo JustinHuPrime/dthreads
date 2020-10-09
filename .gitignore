@@ -1,0 +1,10 @@
+/client/bin
+/client/dependencies
+/client/docs
+/client/libdthread.so.*
+/client/dthread-test
+/server/bin
+/server/dependencies
+/server/docs
+/server/dthreadd
+/server/dthreadd-test
