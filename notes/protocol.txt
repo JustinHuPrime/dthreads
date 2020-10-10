@@ -11,4 +11,4 @@ Client side messages to server (sizes are 32 bit unsigned integers)
 
 Server side messages to client
 
-'f' .. 3 bytes padding .. job id .. size of argument .. 4 bytes padding - server message to the client that a job is finished, follows with data produced.
+'f' .. 3 bytes padding .. job id .. size of returned data .. 4 bytes padding - server message to the client that a job is finished, follows with data produced.

@@ -6,11 +6,10 @@
 #include <sodium.h>
 
 typedef enum {
-  DTHREAD_CONNECT = 1,
-  DTHREAD_IO,
-  DTHREAD_AUTH,
-  DTHREAD_MEM,
+  DTHREAD_IO_FAIL = 1,
+  DTHREAD_AUTH_FAIL,
   DTHREAD_BUSY,
+  DTHREAD_NOT_ATTACHED,
 } DThreadError;
 
 struct DThreadConnection;
@@ -120,9 +119,20 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
  *
  * @param job job to mark as detached
  *
- * @returns zero or negative integer error code (currently doesn't fail)
+ * @returns zero or negative integer error code
  */
 int dthreadDetach(DThreadJob *job);
+
+/**
+ * waits for a job to complete
+ *
+ * @param job job to wait on
+ * @param returnDataOut output pointer, pointer to returned data block
+ * @param returnLenOut output pointer, size of data block
+ *
+ * @returns zero or negative integer error code
+ */
+int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut);
 
 /**
  * removes a connection from the pool

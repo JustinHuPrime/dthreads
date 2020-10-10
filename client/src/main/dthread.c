@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -63,7 +64,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
 
   struct addrinfo *results;
   if (getaddrinfo(host, portString, &hints, &results) != 0)
-    return -DTHREAD_CONNECT;
+    return -DTHREAD_IO_FAIL;
 
   int fd = -1;
   for (struct addrinfo *curr = results; curr != NULL; curr = curr->ai_next) {
@@ -78,7 +79,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
 
   freeaddrinfo(results);
 
-  if (fd == -1) return -DTHREAD_CONNECT;
+  if (fd == -1) return -DTHREAD_IO_FAIL;
 
   // generate and send salt
 
@@ -90,7 +91,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
   randombytes_buf(conn->salt, crypto_pwhash_SALTBYTES);
   if (writeAll(fd, conn->salt, crypto_pwhash_SALTBYTES) == -1) {
     free(conn);
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
   }
 
   // establish encrypted connection
@@ -102,7 +103,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
           crypto_pwhash_MEMLIMIT_INTERACTIVE, crypto_pwhash_ALG_DEFAULT) != 0) {
     sodium_free(key);
     free(conn);
-    return -DTHREAD_MEM;
+    return -DTHREAD_AUTH_FAIL;
   }
 
   conn->writeState =
@@ -117,7 +118,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
     sodium_free(conn->writeState);
     sodium_free(key);
     free(conn);
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
   }
 
   if (readAll(fd, header, crypto_secretstream_xchacha20poly1305_HEADERBYTES) !=
@@ -125,7 +126,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
     sodium_free(conn->writeState);
     sodium_free(key);
     free(conn);
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
   }
 
   conn->readState =
@@ -136,7 +137,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
     sodium_free(conn->readState);
     sodium_free(key);
     free(conn);
-    return -DTHREAD_AUTH;
+    return -DTHREAD_AUTH_FAIL;
   }
 
   sodium_free(key);
@@ -150,7 +151,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
     sodium_free(conn->writeState);
     sodium_free(conn->readState);
     free(conn);
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
   }
 
   unsigned char serverCapMsg[sizeof(uint32_t)];
@@ -161,7 +162,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
     sodium_free(conn->writeState);
     sodium_free(conn->readState);
     free(conn);
-    return -DTHREAD_AUTH;
+    return -DTHREAD_AUTH_FAIL;
   }
 
   conn->bandwidth =
@@ -202,7 +203,7 @@ int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
                                                header, 16, NULL, 0, 0);
     if (writeAll(conn->fd, headerCT,
                  16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
-      retval = -DTHREAD_IO;
+      retval = -DTHREAD_IO_FAIL;
       break;
     }
 
@@ -213,7 +214,7 @@ int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
                                                file, fileLen, NULL, 0, 0);
     if (writeAll(conn->fd, headerCT,
                  fileLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
-      retval = -DTHREAD_IO;
+      retval = -DTHREAD_IO_FAIL;
       free(fileCT);
       break;
     }
@@ -254,7 +255,7 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
                                              header, 16, NULL, 0, 0);
   if (writeAll(conn->fd, headerCT,
                16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0)
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
 
   // send data
   unsigned char *dataCT =
@@ -264,7 +265,7 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
   if (writeAll(conn->fd, headerCT,
                dataLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
     free(dataCT);
-    return -DTHREAD_IO;
+    return -DTHREAD_IO_FAIL;
   }
 
   // construct job entry
@@ -287,18 +288,20 @@ int dthreadDetach(DThreadJob *job) {
   switch (job->status) {
     case DTHREAD_SENT: {
       job->status = DTHREAD_DETACHED;
-      break;
+      return 0;
     }
     case DTHREAD_DONE: {
       free(job->returnData);
       job->prev->next = job->next;
       job->next->prev = job->prev;
       free(job);
-      break;
+      return 0;
     }
     case DTHREAD_DETACHED: {
-      // do nothing
-      break;
+      return -DTHREAD_NOT_ATTACHED;
+    }
+    default: {
+      abort();
     }
   }
 }
@@ -313,6 +316,87 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
   free(conn);
 
   return 0;
+}
+
+int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
+  switch (job->status) {
+    case DTHREAD_SENT: {
+      // need to wait on it
+      while (true) {
+        unsigned char
+            headerCT[16 + crypto_secretstream_xchacha20poly1305_ABYTES];
+        if (readAll(job->conn->fd, headerCT,
+                    16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0)
+          return -DTHREAD_IO_FAIL;
+        unsigned char header[16];
+        crypto_secretstream_xchacha20poly1305_pull(
+            job->conn->readState, header, NULL, NULL, headerCT,
+            16 + crypto_secretstream_xchacha20poly1305_ABYTES, NULL, 0);
+
+        uint32_t jobId =
+            ntohl((uint32_t)header[4] << 24 | (uint32_t)header[5] << 16 |
+                  (uint32_t)header[6] << 8 | (uint32_t)header[7] << 0);
+        uint32_t returnLen =
+            ntohl((uint32_t)header[8] << 24 | (uint32_t)header[9] << 16 |
+                  (uint32_t)header[10] << 8 | (uint32_t)header[11] << 0);
+
+        unsigned char *returnDataCT =
+            malloc(returnLen + crypto_secretstream_xchacha20poly1305_ABYTES);
+        if (readAll(job->conn->fd, returnDataCT,
+                    returnLen + crypto_secretstream_xchacha20poly1305_ABYTES) !=
+            0) {
+          free(returnDataCT);
+          return -DTHREAD_IO_FAIL;
+        }
+        void *returnData = malloc(returnLen);
+        crypto_secretstream_xchacha20poly1305_pull(
+            job->conn->readState, returnData, NULL, NULL, returnDataCT,
+            returnLen + crypto_secretstream_xchacha20poly1305_ABYTES, NULL, 0);
+        free(returnDataCT);
+
+        if (jobId == job->jobId) {
+          // this is for us
+          *returnDataOut = returnData;
+          *returnLenOut = returnLen;
+
+          job->prev->next = job->next;
+          job->next->prev = job->prev;
+          break;
+        } else {
+          // not for us - find somewhere to store it
+          DThreadJob *curr;
+          for (curr = job->conn->jobs->next; curr != job->conn->jobs;
+               curr = curr->next) {
+            if (jobId == curr->jobId) {
+              curr->returnData = returnData;
+              curr->returnLen = returnLen;
+              break;
+            }
+          }
+          if (curr == job->conn->jobs) {
+            // didn't find anywhere to store it - spurious data from server
+            free(returnData);
+          }
+        }
+      }
+      return 0;
+    }
+    case DTHREAD_DONE: {
+      *returnDataOut = job->returnData;
+      *returnLenOut = job->returnLen;
+
+      job->prev->next = job->next;
+      job->next->prev = job->prev;
+      free(job);
+      return 0;
+    }
+    case DTHREAD_DETACHED: {
+      return -DTHREAD_NOT_ATTACHED;
+    }
+    default: {
+      abort();
+    }
+  }
 }
 
 int dthreadPoolUninit(DThreadPool *pool) {
