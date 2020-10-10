@@ -73,7 +73,7 @@ WARNINGS := -pedantic -pedantic-errors -Wall -Wextra -Wdouble-promotion\
 -Wduplicated-branches -Wduplicated-cond -Wfloat-equal -Wshadow\
 -Wplacement-new=2 -Wunused-macros -Wcast-qual -Wcast-align=strict\
 -Wconditionally-supported -Wconversion -Wzero-as-null-pointer-constant\
--Wdate-time -Wuseless-cast -Wextra-semi -Wlogical-op -Wggregate-return\
+-Wdate-time -Wuseless-cast -Wextra-semi -Wlogical-op -Waggregate-return\
 -Wmissing-declarations -Wnormalized -Wopenmp-simd -Wpacked -Wpadded\
 -Wredundant-decls -Winline -Winvalid-pch -Wvector-operation-performance\
 -Wstack-protector -Whsa -Wabi-tag -Wctor-dtor-privacy -Wnoexcept\
@@ -84,7 +84,7 @@ LIBNAMES := libsodium
 OPTIONS := -std=c++17 -D_POSIX_C_SOURCE=202010L -pthread -I$(SRCDIR) $(WARNINGS)\
 $(shell pkg-config --cflags $(LIBNAMES))
 TOPTIONS := -I$(TSRCDIR)
-LIBS := $(shell pkg-config --libs $(LIBNAMES))
+LIBS := $(shell pkg-config --libs $(LIBNAMES)) -ldl
 
 DEBUGOPTIONS := -Og -ggdb
 RELEASEOPTIONS := -O3 -Wunused -Wdisabled-optimization -DNDEBUG
