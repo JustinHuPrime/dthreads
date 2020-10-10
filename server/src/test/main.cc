@@ -2,6 +2,4 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-int main(void) {
-  return 0;
-}
+int main() { return 0; }
