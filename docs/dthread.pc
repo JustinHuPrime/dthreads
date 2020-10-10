@@ -1,0 +1,10 @@
+prefix=/usr/local
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: dthread
+Description: dthread distributed computing library
+Version: 0.1.0
+Requires.private: libsodium >= 1.0.18
+Cflags: -I${includedir} -pthread
+Libs: -L${libdir} -ldthread
