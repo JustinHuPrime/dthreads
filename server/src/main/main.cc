@@ -13,10 +13,12 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -129,7 +131,10 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  while (true) {
+  std::mutex loopMutex;
+  std::condition_variable threadDone;
+  unsigned long runningThreads = 0;
+  for (unsigned long clientId = 1; true; clientId++) {
     UniqueFD fd(accept(listening.get(), nullptr, nullptr));
     std::cout << "Connecting...\n";
 
@@ -137,6 +142,8 @@ int main() {
     std::array<unsigned char, crypto_pwhash_SALTBYTES> salt;
     if (readAll(fd.get(), salt.data(), salt.size()) == -1) {
       std::cout << "Connection failed (IO error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
 
@@ -157,6 +164,8 @@ int main() {
                       crypto_pwhash_MEMLIMIT_INTERACTIVE,
                       crypto_pwhash_ALG_DEFAULT) != 0) {
       std::cout << "Connection failed (hashing error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
 
@@ -172,10 +181,14 @@ int main() {
         writeState.get(), handshake.data(), key->data());
     if (writeAll(fd.get(), handshake.data(), handshake.size()) != 0) {
       std::cout << "Connection failed (IO error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
     if (readAll(fd.get(), handshake.data(), handshake.size()) != 0) {
       std::cout << "Connection failed (IO error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
     std::unique_ptr<crypto_secretstream_xchacha20poly1305_state,
@@ -187,6 +200,8 @@ int main() {
     if (crypto_secretstream_xchacha20poly1305_init_pull(
             readState.get(), handshake.data(), key->data()) != 0) {
       std::cout << "Connection failed (authentication error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
 
@@ -203,6 +218,8 @@ int main() {
         serverCapMsg.size(), nullptr, 0, 0);
     if (writeAll(fd.get(), serverCapMsgCT.data(), serverCapMsgCT.size()) != 0) {
       std::cout << "Connection failed (IO error)\n";
+      std::unique_lock loopLock(loopMutex);
+      while (runningThreads > 0) threadDone.wait(loopLock);
       continue;
     }
 
@@ -215,14 +232,18 @@ int main() {
           headerCT;
       if (readAll(fd.get(), headerCT.data(), headerCT.size()) != 0) {
         std::cout << "Connection failed (IO error)\n";
-        goto outer_continue;
+        std::unique_lock loopLock(loopMutex);
+        while (runningThreads > 0) threadDone.wait(loopLock);
+        goto end_loop;
       }
       std::array<unsigned char, 16> header;
       if (crypto_secretstream_xchacha20poly1305_pull(
               readState.get(), header.data(), nullptr, nullptr, headerCT.data(),
               headerCT.size(), nullptr, 0) != 0) {
         std::cout << "Connection failed (authentication error)\n";
-        goto outer_continue;
+        std::unique_lock loopLock(loopMutex);
+        while (runningThreads > 0) threadDone.wait(loopLock);
+        goto end_loop;
       }
 
       switch (header[0]) {
@@ -241,46 +262,62 @@ int main() {
               fileLen + crypto_secretstream_xchacha20poly1305_ABYTES);
           if (readAll(fd.get(), bufferCT.data(), bufferCT.size()) != 0) {
             std::cout << "Connection failed (IO error)\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           std::vector<unsigned char> buffer(fileLen);
           if (crypto_secretstream_xchacha20poly1305_pull(
                   readState.get(), buffer.data(), nullptr, nullptr,
                   bufferCT.data(), bufferCT.size(), nullptr, 0) != 0) {
             std::cout << "Connection failed (authentication error)\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
 
           UniqueFD dlfd(creat("temp.so", S_IRWXU));
           if (dlfd.get() == -1) {
             std::cout << "Could not open temp file\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           if (writeAll(dlfd.get(), buffer.data(), fileLen) != 0) {
             std::cout << "Could not write to temp file\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           dlfd.reset();
 
           void *handle = dlopen("./temp.so", RTLD_NOW | RTLD_LOCAL);
           if (handle == nullptr) {
             std::cout << "Could not load temp file\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           if (dlsym(handle, "jobInLen") == nullptr) {
             std::cout << "Missing jobInLen from sent file\n";
             dlclose(handle);
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           if (dlsym(handle, "jobOutLen") == nullptr) {
             std::cout << "Missing jobOutLen from sent file\n";
             dlclose(handle);
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           if (dlsym(handle, "job") == nullptr) {
             std::cout << "Missing job from sent file\n";
             dlclose(handle);
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           files[fileId] = JobFile(handle);
 
@@ -300,7 +337,9 @@ int main() {
           JobFile &file = files[fileId];
           if (file.get() == nullptr) {
             std::cout << "Connection failed (client named bad fileId)\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
 
           uint32_t inLen =
@@ -315,19 +354,28 @@ int main() {
               inLen + crypto_secretstream_xchacha20poly1305_ABYTES);
           if (readAll(fd.get(), inBufferCT.data(), inBufferCT.size()) != 0) {
             std::cout << "Connection failed (IO error)\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
           std::vector<unsigned char> inBuffer(inLen);
           if (crypto_secretstream_xchacha20poly1305_pull(
                   readState.get(), inBuffer.data(), nullptr, nullptr,
                   inBufferCT.data(), inBufferCT.size(), nullptr, 0) != 0) {
             std::cout << "Connection failed (authentication error)\n";
-            goto outer_continue;
+            std::unique_lock loopLock(loopMutex);
+            while (runningThreads > 0) threadDone.wait(loopLock);
+            goto end_loop;
           }
 
+          {
+            std::scoped_lock scopedLoopLock(loopMutex);
+            runningThreads++;
+          }
           std::thread jobRunner(
-              [jobId, outLen, function, &fd,
-               &writeState](std::vector<unsigned char> inBuffer) {
+              [jobId, outLen, function, &fd, &writeState, &clientId, &loopMutex,
+               &runningThreads,
+               &threadDone](std::vector<unsigned char> inBuffer) {
                 std::vector<unsigned char> outBuffer(outLen);
                 function(inBuffer.data(), outBuffer.data());
 
@@ -338,23 +386,37 @@ int main() {
                 uint32_t netOutLen = htonl(outLen);
                 memcpy(header.data() + 8, &netOutLen, 4);
 
-                std::array<unsigned char,
-                           16 + crypto_secretstream_xchacha20poly1305_ABYTES>
-                    headerCT;
-                crypto_secretstream_xchacha20poly1305_push(
-                    writeState.get(), headerCT.data(), nullptr, header.data(),
-                    header.size(), nullptr, 0, 0);
-                if (writeAll(fd.get(), headerCT.data(), headerCT.size()) != 0)
-                  return;
+                {
+                  std::scoped_lock scopedLoopLock(loopMutex);
 
-                std::vector<unsigned char> outBufferCT(
-                    outLen + crypto_secretstream_xchacha20poly1305_ABYTES);
-                crypto_secretstream_xchacha20poly1305_push(
-                    writeState.get(), outBufferCT.data(), nullptr,
-                    outBuffer.data(), outBuffer.size(), nullptr, 0, 0);
-                if (writeAll(fd.get(), outBufferCT.data(),
-                             outBufferCT.size()) != 0)
-                  return;
+                  std::array<unsigned char,
+                             16 + crypto_secretstream_xchacha20poly1305_ABYTES>
+                      headerCT;
+                  crypto_secretstream_xchacha20poly1305_push(
+                      writeState.get(), headerCT.data(), nullptr, header.data(),
+                      header.size(), nullptr, 0, 0);
+                  if (writeAll(fd.get(), headerCT.data(), headerCT.size()) !=
+                      0) {
+                    runningThreads--;
+                    threadDone.notify_one();
+                    return;
+                  }
+
+                  std::vector<unsigned char> outBufferCT(
+                      outLen + crypto_secretstream_xchacha20poly1305_ABYTES);
+                  crypto_secretstream_xchacha20poly1305_push(
+                      writeState.get(), outBufferCT.data(), nullptr,
+                      outBuffer.data(), outBuffer.size(), nullptr, 0, 0);
+                  if (writeAll(fd.get(), outBufferCT.data(),
+                               outBufferCT.size()) != 0) {
+                    runningThreads--;
+                    threadDone.notify_one();
+                    return;
+                  }
+
+                  runningThreads--;
+                  threadDone.notify_one();
+                }
               },
               inBuffer);
           jobRunner.detach();
@@ -364,11 +426,13 @@ int main() {
         default: {
           // bad client!
           std::cout << "Connection failed (protocol error)\n";
-          goto outer_continue;
+          std::unique_lock loopLock(loopMutex);
+          while (runningThreads > 0) threadDone.wait(loopLock);
+          goto end_loop;
         }
       }
     }
-  outer_continue:;
+  end_loop:;
   }
 
   return EXIT_SUCCESS;
