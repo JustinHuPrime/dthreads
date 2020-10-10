@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
+.PHONY: all clean
+
 all: sum sumJob.so
 
-.PHONY: clean
-
 sum: sum.c
-	gcc -g -o sum sum.c -I../../client/src/main/ -L../../client -l:libdthread.so.0.1.0
+	gcc -g -o sum sum.c -I/usr/local/include/dthread -ldthread
 
 sumJob.so: sumJob.c
 	gcc -shared -o sumJob.so sumJob.c
