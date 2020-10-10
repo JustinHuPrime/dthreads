@@ -6,8 +6,8 @@ Regular protocol starts:
 
 Client side messages to server (sizes are 32 bit unsigned integers)
 
-'f' .. 3 bytes padding .. size of file .. file id .. 4 bytes padding - client message to server that file to be loaded is being sent, with specified per-client file id
-'j' .. 3 bytes padding .. file id .. job id .. size of argument - client message to start a job with some data, with specified per-client job id
+'f' .. 3 bytes padding .. size of file .. file id .. 4 bytes padding - header for file to be loaded, with specified per-client file id. File sent afterwards, overwrites previously used file if any
+'j' .. 3 bytes padding .. file id .. job id .. size of argument - start a job with some data, with specified per-client job id. Data follows
 
 Server side messages to client
 

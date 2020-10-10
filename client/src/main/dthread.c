@@ -47,9 +47,6 @@ int dthreadPoolInit(DThreadPool *pool) {
   pool->connections = malloc(sizeof(DThreadConnection));
   pool->connections->prev = pool->connections->next = pool->connections;
 
-  pool->nextFileNo = 1;
-  pool->nextJobNo = 1;
-
   return 0;
 }
 
@@ -87,6 +84,8 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
 
   DThreadConnection *conn = malloc(sizeof(DThreadConnection));
   conn->fd = fd;
+  conn->utilization = 0;
+  conn->nextJobId = 1;
 
   randombytes_buf(conn->salt, crypto_pwhash_SALTBYTES);
   if (writeAll(fd, conn->salt, crypto_pwhash_SALTBYTES) == -1) {
@@ -133,7 +132,6 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
       sodium_malloc(sizeof(crypto_secretstream_xchacha20poly1305_state));
   if (crypto_secretstream_xchacha20poly1305_init_pull(conn->readState, header,
                                                       key) != 0) {
-    // bad header
     sodium_free(conn->writeState);
     sodium_free(conn->readState);
     sodium_free(key);
@@ -169,54 +167,145 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
   conn->bandwidth =
       ntohl((uint32_t)serverCapMsg[0] << 24 | (uint32_t)serverCapMsg[1] << 16 |
             (uint32_t)serverCapMsg[2] << 8 | (uint32_t)serverCapMsg[3] << 0);
-  conn->utilization = 0;
 
-  // grab pool mutex and insert connection into pool
-  pthread_mutex_lock(&pool->mutex);
+  conn->jobs = malloc(sizeof(DThreadJob));
+  conn->jobs->prev = conn->jobs->next = conn->jobs;
 
   conn->prev = pool->connections->prev;
   conn->next = pool->connections;
   conn->prev->next = conn;
   conn->next->prev = conn;
 
-  pthread_mutex_unlock(&pool->mutex);
-
   if (connOut != NULL) *connOut = conn;
 
   return 0;
 }
 
-int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen) {
-  pthread_mutex_lock(&pool->mutex);
+int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
+                uint32_t fileId) {
+  int retval = 0;
+
+  // construct common header
+  unsigned char header[16];
+  memset(header, 0, 16);
+  header[0] = 'f';
+  uint32_t netFileLen = htonl(fileLen);
+  memcpy(header + 4, &netFileLen, 4);
+  uint32_t netFileId = htonl(fileId);
+  memcpy(header + 8, &netFileId, 4);
 
   for (DThreadConnection *conn = pool->connections->next;
        conn != pool->connections; conn = conn->next) {
-    unsigned char header[16];
-    memset(header, 0, 16);
-    header[0] = 'f';
-    uint32_t netFileLen = htonl(fileLen);
-    memcpy(header + 4, &netFileLen, 4);
-    uint32_t netFileId = htonl(pool->nextFileNo);
-    pool->nextFileNo++;
-    memcpy(header + 8, &netFileId, 4);
-
+    // encrypt and send header
     unsigned char headerCT[16 + crypto_secretstream_xchacha20poly1305_ABYTES];
     crypto_secretstream_xchacha20poly1305_push(conn->writeState, headerCT, NULL,
                                                header, 16, NULL, 0, 0);
+    if (writeAll(conn->fd, headerCT,
+                 16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
+      retval = -DTHREAD_IO;
+      break;
+    }
+
+    // encrypt and send file
+    unsigned char *fileCT =
+        malloc(fileLen + crypto_secretstream_xchacha20poly1305_ABYTES);
+    crypto_secretstream_xchacha20poly1305_push(conn->writeState, fileCT, NULL,
+                                               file, fileLen, NULL, 0, 0);
+    if (writeAll(conn->fd, headerCT,
+                 fileLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
+      retval = -DTHREAD_IO;
+      free(fileCT);
+      break;
+    }
+
+    free(fileCT);
   }
 
-  pthread_mutex_unlock(&pool->mutex);
+  return retval;
+}
+
+int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
+                 uint32_t dataLen, DThreadJob **jobOut) {
+  // traverse pool to find connection with most free bandwidth
+  DThreadConnection *conn = NULL;
+  uint32_t mostFree = 0;
+  for (DThreadConnection *curr = pool->connections->next;
+       curr != pool->connections; curr = curr->next) {
+    if (curr->bandwidth - curr->utilization > mostFree) {
+      mostFree = curr->bandwidth - curr->utilization;
+      conn = curr;
+    }
+  }
+
+  if (conn == NULL) return -DTHREAD_BUSY;
+
+  // send header
+  unsigned char header[16];
+  header[0] = 'j';
+  uint32_t netFileId = htonl(fileId);
+  memcpy(header + 4, &netFileId, 4);
+  uint32_t netJobId = htonl(conn->nextJobId);
+  memcpy(header + 8, &netJobId, 4);
+  uint32_t netDataLen = htonl(dataLen);
+  memcpy(header + 12, &netDataLen, 4);
+
+  unsigned char headerCT[16 + crypto_secretstream_xchacha20poly1305_ABYTES];
+  crypto_secretstream_xchacha20poly1305_push(conn->writeState, headerCT, NULL,
+                                             header, 16, NULL, 0, 0);
+  if (writeAll(conn->fd, headerCT,
+               16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0)
+    return -DTHREAD_IO;
+
+  // send data
+  unsigned char *dataCT =
+      malloc(dataLen + crypto_secretstream_xchacha20poly1305_ABYTES);
+  crypto_secretstream_xchacha20poly1305_push(conn->writeState, dataCT, NULL,
+                                             data, dataLen, NULL, 0, 0);
+  if (writeAll(conn->fd, headerCT,
+               dataLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
+    free(dataCT);
+    return -DTHREAD_IO;
+  }
+
+  // construct job entry
+  DThreadJob *job = malloc(sizeof(DThreadJob));
+  job->status = DTHREAD_SENT;
+  job->conn = conn;
+  job->jobId = conn->nextJobId;
+  job->prev = conn->jobs->prev;
+  job->next = conn->jobs;
+  job->prev->next = job;
+  job->next->prev = job;
+
+  conn->utilization++;
+  conn->nextJobId++;
 
   return 0;
 }
 
-int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
-  pthread_mutex_lock(&pool->mutex);
+int dthreadDetach(DThreadJob *job) {
+  switch (job->status) {
+    case DTHREAD_SENT: {
+      job->status = DTHREAD_DETACHED;
+      break;
+    }
+    case DTHREAD_DONE: {
+      free(job->returnData);
+      job->prev->next = job->next;
+      job->next->prev = job->prev;
+      free(job);
+      break;
+    }
+    case DTHREAD_DETACHED: {
+      // do nothing
+      break;
+    }
+  }
+}
 
+int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
   conn->prev->next = conn->next;
   conn->next->prev = conn->prev;
-
-  pthread_mutex_unlock(&pool->mutex);
 
   close(conn->fd);
   sodium_free(conn->readState);

@@ -10,7 +10,32 @@ typedef enum {
   DTHREAD_IO,
   DTHREAD_AUTH,
   DTHREAD_MEM,
+  DTHREAD_BUSY,
 } DThreadError;
+
+struct DThreadConnection;
+/**
+ * a job record
+ */
+typedef struct DThreadJob {
+  enum {
+    /** job sent to server, but no reply yet */
+    DTHREAD_SENT,
+    /** job recieved reply from server */
+    DTHREAD_DONE,
+    /** job marked as detached, but no reply yet */
+    DTHREAD_DETACHED,
+  } status;
+
+  uint32_t returnLen;
+  void *returnData;
+
+  struct DThreadConnection *conn;
+  uint32_t jobId;
+
+  struct DThreadJob *next;
+  struct DThreadJob *prev;
+} DThreadJob;
 
 /**
  * a connection to a dthread server
@@ -19,25 +44,25 @@ typedef struct DThreadConnection {
   int fd;
   uint32_t utilization;
   uint32_t bandwidth;
+  uint32_t nextJobId;
 
   unsigned char salt[crypto_pwhash_SALTBYTES];
   crypto_secretstream_xchacha20poly1305_state *writeState;
   crypto_secretstream_xchacha20poly1305_state *readState;
+
+  /** circular doubly-linked list w/ sentinel */
+  DThreadJob *jobs;
 
   struct DThreadConnection *next;
   struct DThreadConnection *prev;
 } DThreadConnection;
 
 /**
- * a circular doubly-linked list w/ sentinel node of connections
+ * A connection pool
  */
 typedef struct {
+  /** circular doubly-linked list w/ sentinel */
   DThreadConnection *connections;
-
-  uint32_t nextFileNo;
-  uint32_t nextJobNo;
-
-  pthread_mutex_t mutex;
 } DThreadPool;
 
 /**
@@ -51,8 +76,6 @@ int dthreadPoolInit(DThreadPool *pool);
 
 /**
  * adds a connection to the pool
- *
- * blocking, thread-safe
  *
  * @param pool pool to add to
  * @param host host to connect to
@@ -71,18 +94,45 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
  * @param pool pool to upload to
  * @param file file to upload
  * @param fileLen length of file
+ * @param fileId file id to send
  *
- * @returns positive integer file id or negative integer error code
+ * @returns zero or negative integer error code
  */
-int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen);
+int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
+                uint32_t fileId);
+
+/**
+ * queues a job on an appropriate server
+ *
+ * @param pool pool to start job in
+ * @param fileId file id to run
+ * @param data data to give to job
+ * @param dataLen length of data
+ * @param jobOut output pointer, job for later waiting
+ *
+ * @returns zero or negative integer error code
+ */
+int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
+                 uint32_t dataLen, DThreadJob **jobOut);
+
+/**
+ * marks a job as detached
+ *
+ * @param job job to mark as detached
+ *
+ * @returns zero or negative integer error code (currently doesn't fail)
+ */
+int dthreadDetach(DThreadJob *job);
 
 /**
  * removes a connection from the pool
  *
- * blocking, thread safe
+ * note that the connection should not be deleted while a job assigned to this
+ * connection is being joined
  *
  * @param pool pool to remove connection from
  * @param connection connection to remove - must be in the pool and have no jobs
+ *
  * @returns negative integer error code or 0 on success - currently doesn't fail
  */
 int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
@@ -91,11 +141,7 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
  * closes all connections and deinitializes the pool
  *
  * @param pool pool to deinit
+ *
  * @returns negative integer error code or 0 on success - currently doesn't fail
  */
 int dthreadPoolUninit(DThreadPool *pool);
-
-typedef struct {
-  DThreadConnection *connection;
-  uint32_t jobid;
-} DThreadJob;
