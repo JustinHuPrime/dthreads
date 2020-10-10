@@ -4,10 +4,9 @@
 
 // sums numbers from 1 to 100 (inclusive) in blocks of 10 numbers at a time
 
+#include <dthread/dthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-#include "dthread.h"
 
 int main() {
   int retval;
