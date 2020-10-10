@@ -62,12 +62,14 @@ WARNINGS := -pedantic -pedantic-errors -Wall -Wextra -Wdouble-promotion\
 -Wunsuffixed-float-constants
 
 # compiler options
+LIBNAMES := libsodium
 OPTIONS := -std=c18 -m64 -D_POSIX_C_SOURCE=202002L -I$(SRCDIR) $(WARNINGS)\
--fPIC
+-fPIC $(shell pkg-config --cflags $(LIBNAMES))
+TOPTIONS := -I$(TSRCDIR)
+LIBS := $(shell pkg-config --libs $(LIBNAMES))
+
 DEBUGOPTIONS := -Og -ggdb -Wno-unused-parameter
 RELEASEOPTIONS := -O3 -D NDEBUG
-TOPTIONS := -I$(TSRCDIR)
-LIBS :=
 
 
 .PHONY: debug release clean diagnose docs

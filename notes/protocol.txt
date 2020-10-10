@@ -1,6 +1,14 @@
 Client and server use pre-shared password for authentication.
-Server sends message advertising their capabilities.
-Client can (at any time) send a .so file and a list of names to server,
-  server saves file and names and replies with uint64_t's it uses to remember those routines.
-Client can (at any time) send a routine number and argument pointer to server,
-  server replies with sequence number, then runs specified routine with specified argument and eventually replies with sequence number and data produced by routine.
+Client sends password salt to use to the server
+Server sends message advertising their capabilities (32 bit number representing max number of assigned jobs).
+
+Regular protocol starts:
+
+Client side messages to server (sizes are 32 bit unsigned integers)
+
+'f' .. 3 bytes padding .. size of file .. file id .. 4 bytes padding - client message to server that file to be loaded is being sent, with specified per-client file id
+'j' .. 3 bytes padding .. file id .. job id .. size of argument - client message to start a job with some data, with specified per-client job id
+
+Server side messages to client
+
+'f' .. 3 bytes padding .. job id .. size of argument .. 4 bytes padding - server message to the client that a job is finished, follows with data produced.

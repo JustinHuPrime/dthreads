@@ -2,77 +2,100 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#include <pthread.h>
 #include <sodium.h>
 
-typedef struct DThreadConnectionCrypto {
-  crypto_secretstream_xchacha20poly1305_state state;
-  unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
-  unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
-} DThreadConnectionCrypto;
+typedef enum {
+  DTHREAD_CONNECT = 1,
+  DTHREAD_IO,
+  DTHREAD_AUTH,
+  DTHREAD_MEM,
+} DThreadError;
 
 /**
- * A connection to a single dthread server
- * 
- * has pointer
+ * a connection to a dthread server
  */
 typedef struct DThreadConnection {
   int fd;
-  DThreadConnectionCrypto *crypto;
+  uint32_t utilization;
+  uint32_t bandwidth;
+
+  unsigned char salt[crypto_pwhash_SALTBYTES];
+  crypto_secretstream_xchacha20poly1305_state *writeState;
+  crypto_secretstream_xchacha20poly1305_state *readState;
+
+  struct DThreadConnection *next;
+  struct DThreadConnection *prev;
 } DThreadConnection;
 
 /**
- * A pool of connections to zero or more dthread servers
+ * a circular doubly-linked list w/ sentinel node of connections
  */
-typedef struct DThreadPool {
-  size_t connectionsSize;
-  size_t connectionsCapacity;
-  DThreadConnection **connections;
+typedef struct {
+  DThreadConnection *connections;
+
+  uint32_t nextFileNo;
+  uint32_t nextJobNo;
+
+  pthread_mutex_t mutex;
 } DThreadPool;
 
 /**
- * A job running on some server from some pool
- */
-typedef struct DThreadJob {
-  DThreadPool *pool;
-  DThreadConnection *connection;
-} DThreadJob;
-
-/**
- * Initializes an empty pool
- *
- * this also spins off a local thread to handle networking
+ * initializes a pool connections
  *
  * @param pool pool to initialize
+ *
+ * @returns negative integer error code or 0 on success
  */
 int dthreadPoolInit(DThreadPool *pool);
 
 /**
- * Adds a server to some pool
+ * adds a connection to the pool
  *
- * @param pool pool to add server to
- * @param host web addess of host to connect to
- * @param port port number to connect to
- * @param password password to use to communicate to the server
- */
-int dthreadConnect(DThreadPool *pool, char const *host, unsigned short port, char const *password);
-
-/**
- * Adds a job to some pool
+ * blocking, thread-safe
  *
- * @param job job struct to initialize
- * @param pool pool to assign job to
- * @param routineDesc routine number to run
- * @param arg data to pass to routine
+ * @param pool pool to add to
+ * @param host host to connect to
+ * @param port port to connect to
+ * @param password password to use
+ * @param connOut nullable output pointer - stores address of created connection
+ *
+ * @returns negative integer error code or 0 on success
  */
-int dthreadCreate(DThreadJob *job, DThreadPool *pool, int routineDesc,
-                  void *arg);
+int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
+                   char const *password, DThreadConnection **connOut);
 
 /**
- * Detaches a job from the current thread
+ * uploads a file to the server
+ *
+ * @param pool pool to upload to
+ * @param file file to upload
+ * @param fileLen length of file
+ *
+ * @returns positive integer file id or negative integer error code
  */
-int dthreadDetach(DThreadJob *job);
+int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen);
 
 /**
- * Waits for a job to finish
+ * removes a connection from the pool
+ *
+ * blocking, thread safe
+ *
+ * @param pool pool to remove connection from
+ * @param connection connection to remove - must be in the pool and have no jobs
+ * @returns negative integer error code or 0 on success - currently doesn't fail
  */
-int dthreadJoin(DThreadJob *job);
+int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
+
+/**
+ * closes all connections and deinitializes the pool
+ *
+ * @param pool pool to deinit
+ * @returns negative integer error code or 0 on success - currently doesn't fail
+ */
+int dthreadPoolUninit(DThreadPool *pool);
+
+typedef struct {
+  DThreadConnection *connection;
+  uint32_t jobid;
+} DThreadJob;
