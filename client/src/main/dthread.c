@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -48,6 +49,8 @@ static int readAll(int fd, void *buf, size_t len) {
 }
 
 int dthreadPoolInit(DThreadPool *pool) {
+  if (sodium_init() == -1) return -DTHREAD_SODIUM_FAIL;
+
   pool->connections = malloc(sizeof(DThreadConnection));
   pool->connections->prev = pool->connections->next = pool->connections;
 
@@ -171,8 +174,8 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
   }
 
   conn->bandwidth =
-      ntohl((uint32_t)serverCapMsg[0] << 24 | (uint32_t)serverCapMsg[1] << 16 |
-            (uint32_t)serverCapMsg[2] << 8 | (uint32_t)serverCapMsg[3] << 0);
+      (uint32_t)serverCapMsg[0] << 24 | (uint32_t)serverCapMsg[1] << 16 |
+      (uint32_t)serverCapMsg[2] << 8 | (uint32_t)serverCapMsg[3] << 0;
 
   conn->jobs = malloc(sizeof(DThreadJob));
   conn->jobs->prev = conn->jobs->next = conn->jobs;
@@ -217,7 +220,7 @@ int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
         malloc(fileLen + crypto_secretstream_xchacha20poly1305_ABYTES);
     crypto_secretstream_xchacha20poly1305_push(conn->writeState, fileCT, NULL,
                                                file, fileLen, NULL, 0, 0);
-    if (writeAll(conn->fd, headerCT,
+    if (writeAll(conn->fd, fileCT,
                  fileLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
       retval = -DTHREAD_IO_FAIL;
       free(fileCT);
@@ -295,7 +298,7 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
       malloc(dataLen + crypto_secretstream_xchacha20poly1305_ABYTES);
   crypto_secretstream_xchacha20poly1305_push(conn->writeState, dataCT, NULL,
                                              data, dataLen, NULL, 0, 0);
-  if (writeAll(conn->fd, headerCT,
+  if (writeAll(conn->fd, dataCT,
                dataLen + crypto_secretstream_xchacha20poly1305_ABYTES) != 0) {
     free(dataCT);
     return -DTHREAD_IO_FAIL;
@@ -314,10 +317,25 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
   conn->utilization++;
   conn->nextJobId++;
 
+  *jobOut = job;
+
   return 0;
 }
 
 int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
+  int retval = 0;
+
+  // send 'bye'
+  unsigned char header[16];
+  memset(header, 0, 16);
+  header[0] = 'b';
+  unsigned char headerCT[16 + crypto_secretstream_xchacha20poly1305_ABYTES];
+  crypto_secretstream_xchacha20poly1305_push(conn->writeState, headerCT, NULL,
+                                             header, 16, NULL, 0, 0);
+  if (writeAll(conn->fd, headerCT,
+               16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0)
+    retval = -DTHREAD_IO_FAIL;
+
   conn->prev->next = conn->next;
   conn->next->prev = conn->prev;
 
@@ -326,7 +344,7 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
   sodium_free(conn->writeState);
   free(conn);
 
-  return 0;
+  return retval;
 }
 
 int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
@@ -346,12 +364,11 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
                 0) != 0)
           return -DTHREAD_AUTH_FAIL;
 
-        uint32_t jobId =
-            ntohl((uint32_t)header[4] << 24 | (uint32_t)header[5] << 16 |
-                  (uint32_t)header[6] << 8 | (uint32_t)header[7] << 0);
+        uint32_t jobId = (uint32_t)header[4] << 24 | (uint32_t)header[5] << 16 |
+                         (uint32_t)header[6] << 8 | (uint32_t)header[7] << 0;
         uint32_t returnLen =
-            ntohl((uint32_t)header[8] << 24 | (uint32_t)header[9] << 16 |
-                  (uint32_t)header[10] << 8 | (uint32_t)header[11] << 0);
+            (uint32_t)header[8] << 24 | (uint32_t)header[9] << 16 |
+            (uint32_t)header[10] << 8 | (uint32_t)header[11] << 0;
 
         unsigned char *returnDataCT =
             malloc(returnLen + crypto_secretstream_xchacha20poly1305_ABYTES);
@@ -373,6 +390,8 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
         free(returnDataCT);
 
         if (jobId == job->jobId) {
+          job->conn->utilization--;
+
           // this is for us
           if (returnDataOut != NULL)
             *returnDataOut = returnData;
@@ -390,6 +409,8 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
           for (curr = job->conn->jobs->next; curr != job->conn->jobs;
                curr = curr->next) {
             if (jobId == curr->jobId) {
+              curr->conn->utilization--;
+
               curr->returnData = returnData;
               curr->returnLen = returnLen;
               curr->status = DTHREAD_DONE;

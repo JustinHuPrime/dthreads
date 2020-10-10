@@ -17,6 +17,7 @@ typedef enum {
   DTHREAD_AUTH_FAIL,
   DTHREAD_BUSY,
   DTHREAD_FILE_READ_FAIL,
+  DTHREAD_SODIUM_FAIL,
 } DThreadError;
 
 struct DThreadConnection;
@@ -73,7 +74,7 @@ typedef struct {
  *
  * @param pool pool to initialize
  *
- * @returns negative integer error code or 0 on success (currently can't fail)
+ * @returns negative integer error code or 0 on success
  */
 int dthreadPoolInit(DThreadPool *pool);
 
@@ -149,7 +150,7 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut);
  * @param pool pool to remove connection from
  * @param connection connection to remove - must be in the pool and have no jobs
  *
- * @returns negative integer error code or 0 on success - currently doesn't fail
+ * @returns negative integer error code or 0 on success
  */
 int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
 
@@ -158,7 +159,7 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
  *
  * @param pool pool to deinit
  *
- * @returns negative integer error code or 0 on success - currently doesn't fail
+ * @returns negative integer error code or 0 on success
  */
 int dthreadPoolUninit(DThreadPool *pool);
 
