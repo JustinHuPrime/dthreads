@@ -13,7 +13,7 @@ int main() {
   int retval;
 
   DThreadPool pool;
-  retval = dthreadPoolInit(&pool);
+  retval = dthreadInit(&pool);
   if (retval != 0) return -retval;
 
   retval = dthreadConnect(&pool, "127.0.0.1", 6474, "password", NULL);
@@ -49,7 +49,7 @@ int main() {
     free(outBuffer);
   }
 
-  dthreadPoolUninit(&pool);
+  dthreadUninit(&pool);
 
   printf("Computed: %lu, actual: %lu\n", acc, local);
 

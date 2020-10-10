@@ -76,7 +76,7 @@ typedef struct {
  *
  * @returns negative integer error code or 0 on success
  */
-int dthreadPoolInit(DThreadPool *pool);
+int dthreadInit(DThreadPool *pool);
 
 /**
  * adds a connection to the pool
@@ -147,12 +147,11 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut);
  * note that the connection should not be deleted while a job assigned to this
  * connection is being joined
  *
- * @param pool pool to remove connection from
- * @param connection connection to remove - must be in the pool and have no jobs
+ * @param connection connection to close - must be in a pool and have no jobs
  *
  * @returns negative integer error code or 0 on success
  */
-int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
+int dthreadClose(DThreadConnection *connection);
 
 /**
  * closes all connections and deinitializes the pool
@@ -161,7 +160,7 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
  *
  * @returns negative integer error code or 0 on success
  */
-int dthreadPoolUninit(DThreadPool *pool);
+int dthreadUninit(DThreadPool *pool);
 
 #ifdef __cplusplus
 }

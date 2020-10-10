@@ -48,7 +48,7 @@ static int readAll(int fd, void *buf, size_t len) {
   return 0;
 }
 
-int dthreadPoolInit(DThreadPool *pool) {
+int dthreadInit(DThreadPool *pool) {
   if (sodium_init() == -1) return -DTHREAD_SODIUM_FAIL;
 
   pool->connections = malloc(sizeof(DThreadConnection));
@@ -322,7 +322,7 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
   return 0;
 }
 
-int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
+int dthreadClose(DThreadConnection *conn) {
   int retval = 0;
 
   // send 'bye'
@@ -444,11 +444,11 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
   }
 }
 
-int dthreadPoolUninit(DThreadPool *pool) {
+int dthreadUninit(DThreadPool *pool) {
   int retval = 0;
 
   while (pool->connections->next != pool->connections) {
-    int additional = dthreadClose(pool, pool->connections->next);
+    int additional = dthreadClose(pool->connections->next);
     if (retval == 0) retval = additional;
   }
 
