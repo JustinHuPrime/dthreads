@@ -133,8 +133,8 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
  * waits for a job to complete
  *
  * @param job job to wait on
- * @param returnDataOut output pointer, pointer to returned data block
- * @param returnLenOut output pointer, size of data block
+ * @param returnDataOut nullable output pointer, pointer to returned data block
+ * @param returnLenOut nullable output pointer, size of data block
  *
  * @returns zero or negative integer error code
  */

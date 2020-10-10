@@ -374,8 +374,12 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
 
         if (jobId == job->jobId) {
           // this is for us
-          *returnDataOut = returnData;
-          *returnLenOut = returnLen;
+          if (returnDataOut != NULL)
+            *returnDataOut = returnData;
+          else
+            free(returnData);
+
+          if (returnLenOut != NULL) *returnLenOut = returnLen;
 
           job->prev->next = job->next;
           job->next->prev = job->prev;
@@ -401,8 +405,12 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
       return 0;
     }
     case DTHREAD_DONE: {
-      *returnDataOut = job->returnData;
-      *returnLenOut = job->returnLen;
+      if (returnDataOut != NULL)
+        *returnDataOut = job->returnData;
+      else
+        free(job->returnData);
+
+      if (returnLenOut != NULL) *returnLenOut = job->returnLen;
 
       job->prev->next = job->next;
       job->next->prev = job->prev;
