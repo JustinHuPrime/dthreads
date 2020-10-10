@@ -1,0 +1,159 @@
+.\" Copyright 2020 Justin Hu
+.\"
+.\" SPDX-License-Identifier: LGPL-3.0-or-later
+
+.TH DTHREAD 3 "October 2020" "0.1.0" "Linux Programmer's Manual"
+.SH NAME
+dthreadInit,
+dthreadConnect,
+dthreadLoad,
+dthreadLoadFile,
+dthreadStart,
+dthreadJoin,
+dthreadClose,
+dthreadUninit \- distributed computing interface
+
+.SH SYNOPSIS
+.NF
+.B #include <dthread/dthread.h>
+.PP
+.BI "int dthreadInit(DThreadPool *" "pool" );
+.PP
+.BI "int dthreadConnect(DThreadPool *" "pool" ", char const *" "host" ", uint16_t " "port",
+.BI "                   char const *" "password" ", DThreadConnection **" "connOut" );
+.PP
+.BI "int dthreadLoad(DThreadPool *" "pool" ", void *" "file" ", uint32_t " "fileLen",
+.BI "                uint32_t " fileId );
+.PP
+.BI "int dthreadLoadFile(DThreadPool *" "pool" ", char const *" "filename",
+.BI "                    uint32_t " fileId );
+.PP
+.BI "int dthreadStart(DThreadPool *" "pool" ", uint32_t " "fileId" ", void *" "data" ,
+.BI "                 uint32_t " "dataLen" ", DThreadJob **" "jobOut" );
+.PP
+.BI "int dthreadJoin(DThreadJob *" "job" ", void **" "returnDataOut",
+.BI "                uint32_t *" "returnLenOut" );
+.PP
+.BI "int dthreadClose(DThreadConnection *" "connection" );
+.PP
+.BI "int dthreadUninit(DThreadPool *" "pool" );
+
+.SH DESCRIPTION
+The function
+.BR dthreadInit ()
+initializes the job server pool pointed to by
+.IR pool
+to be an empty pool.
+.PP
+The function
+.BR dthreadConnect ()
+adds a job to the given
+.IR pool ,
+connecting to the given
+.IR host
+and
+.IR port
+and using the given
+.IR password
+to encrypt traffic to and from the server. The connection object is saved in
+.IR jobOut
+when it is non-NULL.
+.PP
+The function
+.BR dthreadLoad ()
+sends a dynamically loadable executable file to all connections in
+.IR pool ,
+with the file pointed to by
+.IR file ,
+the file's length in bytes in
+.IR fileLen ,
+and the identification number to be assigned to the file in
+.IR fileId .
+.PP
+If
+.IR fileId
+was previously assigned to a file, it is overwritten. See
+.BR dthread-job (3)
+for the interface this file must contain.
+.PP
+The function
+.BR dthreadLoadFile ()
+is like
+.BR dthreadLoad ()
+except the given
+.IR filename
+is read and its contents and length used in place of the
+.IR file
+and
+.IR fileLen .
+.PP
+The function
+.BR dthreadStart ()
+starts a job on the least-utilized server in
+.IR pool ,
+calling the job specified in the file assigned to
+.IR fileId
+and giving the job the data contained in
+.IR data ,
+(which has a length of
+.IR dataLen ).
+The job object is saved in
+.IR jobOut ,
+which may not be NULL.
+.PP
+The function
+.BR dthreadJoin ()
+waits for the given
+.IR job
+to finish and produce some data, which it stores in
+.IR returnDataOut ,
+and the length of the returned data is stored in
+.IR returnLenOut ,
+and both of these pointers may be NULL. The data stored in
+.IR returnDataOut
+needs to be
+.BR free (3)ed.
+.PP
+Note that there is no function to detach a job.
+.PP
+The function
+.BR dthreadClose ()
+closes then given
+.IR connection
+to a job server and removes it from its containing pool. It is undefined
+behaviour if the connection still has jobs running on it.
+.PP
+The function
+.BR dthreadUninit ()
+uninitializes the given
+.IR pool .
+Like
+.BR dthreadClose () ,
+it is undefined behaviour if any connection in the pool still has jobs running
+on it.
+
+.SH RETURN VALUE
+All functions return either 0 on success or a negative value if an error
+happened.
+
+.SH ERRORS
+.TP
+.B \-DTHREAD_IO_FAIL
+The connection to the server is nolonger functioning.
+.TP
+.B \-DTHREAD_AUTH_FAIL
+The server's password does not match our password, or we cannot decrypt the
+data sent by the server.
+.TP
+.B \-DTHREAD_BUSY
+There is no free job server to assign the job to.
+.TP
+.B \-DTHREAD_FILE_READ_FAIL
+.BR dthreadLoadFile ()
+could not read the file at the given filename.
+.TP
+.B \-DTHREAD_SODIUM_FAIL
+The crypto library libsodium could not be initialized.
+
+.SH SEE ALSO
+.BR dthread-job (3)

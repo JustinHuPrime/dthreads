@@ -1,0 +1,46 @@
+.\" Copyright 2020 Justin Hu
+.\"
+.\" SPDX-License-Identifier: LGPL-3.0-or-later
+
+.TH DTHREAD\-JOB 3 "October 2020" "0.1.0" "Linux Programmer's Manual"
+.SH NAME
+jobInLen,
+jobOutLen,
+job \- job file interface for dthread
+
+.SH SYNOPSIS
+.NF
+.B #include <dthread/interface.h>
+.PP
+.BI "extern uint32_t const " jobInLen ;
+.PP
+.BI "extern uint32_t const " jobOutLen ;
+.PP
+.BI "void job(void *" inBuffer ", void *" outBuffer );
+
+.SH DESCRIPTION
+Every file loaded by dthread must be a dynamically loadable executable file
+(.so file) with at least the above three symbols.
+.PP
+The constant
+.IR jobInLen
+gives the required length of the input buffer.
+.PP
+The constant
+.IR jobOutLen
+likewise gives the length of the output buffer.
+.PP
+The function
+.BR job ()
+is called by the job server with an
+.IR inBuffer
+of size given by
+.IR jobInLen
+and with data from the client, and with an
+.IR outBuffer
+of size given by
+.IR jobOutLen
+whose contents will be sent back to the client when the job is done running.
+
+.SH SEE ALSO
+.BR dthread (3)
