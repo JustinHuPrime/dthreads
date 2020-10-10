@@ -16,7 +16,6 @@ typedef enum {
   DTHREAD_IO_FAIL = 1,
   DTHREAD_AUTH_FAIL,
   DTHREAD_BUSY,
-  DTHREAD_NOT_ATTACHED,
   DTHREAD_FILE_READ_FAIL,
 } DThreadError;
 
@@ -30,8 +29,6 @@ typedef struct DThreadJob {
     DTHREAD_SENT,
     /** job recieved reply from server */
     DTHREAD_DONE,
-    /** job marked as detached, but no reply yet */
-    DTHREAD_DETACHED,
   } status;
 
   uint32_t returnLen;
@@ -131,15 +128,6 @@ int dthreadLoadFile(DThreadPool *pool, char const *filename, uint32_t fileId);
  */
 int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
                  uint32_t dataLen, DThreadJob **jobOut);
-
-/**
- * marks a job as detached
- *
- * @param job job to mark as detached
- *
- * @returns zero or negative integer error code
- */
-int dthreadDetach(DThreadJob *job);
 
 /**
  * waits for a job to complete

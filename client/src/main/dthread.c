@@ -317,28 +317,6 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
   return 0;
 }
 
-int dthreadDetach(DThreadJob *job) {
-  switch (job->status) {
-    case DTHREAD_SENT: {
-      job->status = DTHREAD_DETACHED;
-      return 0;
-    }
-    case DTHREAD_DONE: {
-      free(job->returnData);
-      job->prev->next = job->next;
-      job->next->prev = job->prev;
-      free(job);
-      return 0;
-    }
-    case DTHREAD_DETACHED: {
-      return -DTHREAD_NOT_ATTACHED;
-    }
-    default: {
-      abort();
-    }
-  }
-}
-
 int dthreadClose(DThreadPool *pool, DThreadConnection *conn) {
   conn->prev->next = conn->next;
   conn->next->prev = conn->prev;
@@ -362,9 +340,11 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
                     16 + crypto_secretstream_xchacha20poly1305_ABYTES) != 0)
           return -DTHREAD_IO_FAIL;
         unsigned char header[16];
-        crypto_secretstream_xchacha20poly1305_pull(
-            job->conn->readState, header, NULL, NULL, headerCT,
-            16 + crypto_secretstream_xchacha20poly1305_ABYTES, NULL, 0);
+        if (crypto_secretstream_xchacha20poly1305_pull(
+                job->conn->readState, header, NULL, NULL, headerCT,
+                16 + crypto_secretstream_xchacha20poly1305_ABYTES, NULL,
+                0) != 0)
+          return -DTHREAD_AUTH_FAIL;
 
         uint32_t jobId =
             ntohl((uint32_t)header[4] << 24 | (uint32_t)header[5] << 16 |
@@ -382,9 +362,14 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
           return -DTHREAD_IO_FAIL;
         }
         void *returnData = malloc(returnLen);
-        crypto_secretstream_xchacha20poly1305_pull(
-            job->conn->readState, returnData, NULL, NULL, returnDataCT,
-            returnLen + crypto_secretstream_xchacha20poly1305_ABYTES, NULL, 0);
+        if (crypto_secretstream_xchacha20poly1305_pull(
+                job->conn->readState, returnData, NULL, NULL, returnDataCT,
+                returnLen + crypto_secretstream_xchacha20poly1305_ABYTES, NULL,
+                0) != 0) {
+          free(returnDataCT);
+          free(returnData);
+          return -DTHREAD_AUTH_FAIL;
+        }
         free(returnDataCT);
 
         if (jobId == job->jobId) {
@@ -403,6 +388,7 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
             if (jobId == curr->jobId) {
               curr->returnData = returnData;
               curr->returnLen = returnLen;
+              curr->status = DTHREAD_DONE;
               break;
             }
           }
@@ -422,9 +408,6 @@ int dthreadJoin(DThreadJob *job, void **returnDataOut, uint32_t *returnLenOut) {
       job->next->prev = job->prev;
       free(job);
       return 0;
-    }
-    case DTHREAD_DETACHED: {
-      return -DTHREAD_NOT_ATTACHED;
     }
     default: {
       abort();
