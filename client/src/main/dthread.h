@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#ifndef DTHREAD_H_
+#define DTHREAD_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <pthread.h>
 #include <sodium.h>
 
@@ -10,6 +17,7 @@ typedef enum {
   DTHREAD_AUTH_FAIL,
   DTHREAD_BUSY,
   DTHREAD_NOT_ATTACHED,
+  DTHREAD_FILE_READ_FAIL,
 } DThreadError;
 
 struct DThreadConnection;
@@ -45,7 +53,6 @@ typedef struct DThreadConnection {
   uint32_t bandwidth;
   uint32_t nextJobId;
 
-  unsigned char salt[crypto_pwhash_SALTBYTES];
   crypto_secretstream_xchacha20poly1305_state *writeState;
   crypto_secretstream_xchacha20poly1305_state *readState;
 
@@ -99,6 +106,17 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
  */
 int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
                 uint32_t fileId);
+
+/**
+ * uploads a file to the server
+ *
+ * @param pool pool to upload to
+ * @param filename file name to upload
+ * @param fileId file id to send
+ *
+ * @returns zero or negative integer error code
+ */
+int dthreadLoadFile(DThreadPool *pool, char const *filename, uint32_t fileId);
 
 /**
  * queues a job on an appropriate server
@@ -155,3 +173,9 @@ int dthreadClose(DThreadPool *pool, DThreadConnection *connection);
  * @returns negative integer error code or 0 on success - currently doesn't fail
  */
 int dthreadPoolUninit(DThreadPool *pool);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // DTHREAD_H_

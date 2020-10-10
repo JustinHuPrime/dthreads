@@ -5,10 +5,13 @@
 #include "dthread.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -88,8 +91,10 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
   conn->utilization = 0;
   conn->nextJobId = 1;
 
-  randombytes_buf(conn->salt, crypto_pwhash_SALTBYTES);
-  if (writeAll(fd, conn->salt, crypto_pwhash_SALTBYTES) == -1) {
+  unsigned char salt[crypto_pwhash_SALTBYTES];
+
+  randombytes_buf(salt, crypto_pwhash_SALTBYTES);
+  if (writeAll(fd, salt, crypto_pwhash_SALTBYTES) == -1) {
     free(conn);
     return -DTHREAD_IO_FAIL;
   }
@@ -99,7 +104,7 @@ int dthreadConnect(DThreadPool *pool, char const *host, uint16_t port,
       sodium_malloc(crypto_secretstream_xchacha20poly1305_KEYBYTES);
   if (crypto_pwhash(
           key, crypto_secretstream_xchacha20poly1305_KEYBYTES, password,
-          strlen(password), conn->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
+          strlen(password), salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
           crypto_pwhash_MEMLIMIT_INTERACTIVE, crypto_pwhash_ALG_DEFAULT) != 0) {
     sodium_free(key);
     free(conn);
@@ -225,6 +230,35 @@ int dthreadLoad(DThreadPool *pool, void *file, uint32_t fileLen,
   return retval;
 }
 
+int dthreadLoadFile(DThreadPool *pool, char const *filename, uint32_t fileId) {
+  int fd = open(filename, O_RDONLY);
+  if (fd == -1) return -DTHREAD_FILE_READ_FAIL;
+
+  struct stat stats;
+  if (fstat(fd, &stats) == -1) {
+    close(fd);
+    return -DTHREAD_FILE_READ_FAIL;
+  }
+
+  if (stats.st_size > UINT32_MAX) {
+    close(fd);
+    return -DTHREAD_FILE_READ_FAIL;
+  }
+
+  void *file = mmap(NULL, (size_t)stats.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (file == MAP_FAILED) {
+    close(fd);
+    return -DTHREAD_FILE_READ_FAIL;
+  }
+
+  close(fd);
+
+  int retval = dthreadLoad(pool, file, (uint32_t)stats.st_size, fileId);
+
+  munmap(file, (size_t)stats.st_size);
+  return retval;
+}
+
 int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
                  uint32_t dataLen, DThreadJob **jobOut) {
   // traverse pool to find connection with most free bandwidth
@@ -242,13 +276,12 @@ int dthreadStart(DThreadPool *pool, uint32_t fileId, void *data,
 
   // send header
   unsigned char header[16];
+  memset(header, 0, 16);
   header[0] = 'j';
   uint32_t netFileId = htonl(fileId);
   memcpy(header + 4, &netFileId, 4);
   uint32_t netJobId = htonl(conn->nextJobId);
   memcpy(header + 8, &netJobId, 4);
-  uint32_t netDataLen = htonl(dataLen);
-  memcpy(header + 12, &netDataLen, 4);
 
   unsigned char headerCT[16 + crypto_secretstream_xchacha20poly1305_ABYTES];
   crypto_secretstream_xchacha20poly1305_push(conn->writeState, headerCT, NULL,
