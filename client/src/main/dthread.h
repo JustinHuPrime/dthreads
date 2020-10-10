@@ -73,7 +73,7 @@ typedef struct {
  *
  * @param pool pool to initialize
  *
- * @returns negative integer error code or 0 on success
+ * @returns negative integer error code or 0 on success (currently can't fail)
  */
 int dthreadPoolInit(DThreadPool *pool);
 

@@ -10,4 +10,4 @@
 extern uint32_t const jobInLen;
 extern uint32_t const jobOutLen;
 
-void job(void *, void *);
+void job(void *inBuffer, void *outBuffer);
