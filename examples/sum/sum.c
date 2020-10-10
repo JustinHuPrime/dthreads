@@ -37,7 +37,7 @@ int main() {
     if (retval != 0) return -retval;
   }
 
-  uint64_t acc;
+  uint64_t acc = 0;
   for (size_t idx = 0; idx < 10; idx++) {
     void *outBuffer;
     retval = dthreadJoin(jobs[idx], &outBuffer, NULL);
